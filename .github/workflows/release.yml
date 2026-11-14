@@ -1,0 +1,87 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    name: Linux x86_64 AppImage
+    # Oldest supported runner = oldest glibc = widest AppImage compatibility.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libfontconfig1-dev libfreetype-dev libxkbcommon-dev libxkbcommon-x11-dev \
+            libwayland-dev libx11-dev libxcursor-dev libxi-dev libxrandr-dev libgl1-mesa-dev \
+            file desktop-file-utils
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --locked
+      - name: Build AppImage (linuxdeploy)
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1" # no FUSE on the runner
+          OUTPUT: skytrace-${{ github.ref_name }}-x86_64.AppImage
+        run: |
+          curl -fsSL -o linuxdeploy https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          chmod +x linuxdeploy
+          desktop-file-validate packaging/skytrace.desktop
+          ./linuxdeploy --appdir AppDir \
+            --executable target/release/skytrace \
+            --desktop-file packaging/skytrace.desktop \
+            --icon-file packaging/skytrace.png \
+            --output appimage
+          ls -la *.AppImage
+          file "$OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-appimage
+          path: skytrace-*-x86_64.AppImage
+          if-no-files-found: error
+
+  windows:
+    name: Windows x86_64 exe
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --locked
+      - name: Rename binary
+        shell: bash
+        run: cp target/release/skytrace.exe "skytrace-${GITHUB_REF_NAME}-windows-x86_64.exe"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-exe
+          path: skytrace-*-windows-x86_64.exe
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: [linux, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Create release with generated notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -la dist
+          (cd dist && sha256sum * > SHA256SUMS.txt)
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "skytrace $GITHUB_REF_NAME" \
+            --generate-notes \
+          || gh release upload "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --clobber

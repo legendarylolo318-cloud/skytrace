@@ -1076,17 +1076,23 @@ impl App {
             )
             .into(),
         );
-        let status = if self.status.ok {
-            self.status.message.clone()
-        } else if let Some(at) = self.status.retry_at {
-            format!(
-                "{} — retry in {} s",
-                self.status.message,
-                at.saturating_duration_since(now).as_secs()
-            )
-        } else {
-            self.status.message.clone()
-        };
+        let status =
+            if self.status.ok && self.status.last_update.is_some() && self.planes.is_empty() {
+                format!(
+                    "{} · No aircraft in this area right now — zoom out to see more",
+                    self.status.message
+                )
+            } else if self.status.ok {
+                self.status.message.clone()
+            } else if let Some(at) = self.status.retry_at {
+                format!(
+                    "{} — retry in {} s",
+                    self.status.message,
+                    at.saturating_duration_since(now).as_secs()
+                )
+            } else {
+                self.status.message.clone()
+            };
         win.set_status_ok(self.status.ok);
         win.set_status_text(status.into());
     }
@@ -1286,6 +1292,23 @@ mod tests {
             "{}",
             win.get_alert_text()
         );
+
+        // empty response: explain instead of showing a silent empty map
+        with_app(|a| {
+            a.on_poll(PollEvent::Update {
+                aircraft: vec![],
+                source: "adsb.lol",
+                fallback: false,
+            })
+        });
+        assert_eq!(plane_count(&win), 0);
+        assert!(
+            win.get_status_text().contains("zoom out"),
+            "{}",
+            win.get_status_text()
+        );
+        feed("adsb.lol", false);
+        assert!(!win.get_status_text().contains("zoom out"));
 
         // same data again: nothing is re-pushed, model stays stable
         feed("adsb.lol", false);

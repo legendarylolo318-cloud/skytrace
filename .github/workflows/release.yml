@@ -30,7 +30,7 @@ jobs:
       - name: Build AppImage (linuxdeploy)
         env:
           APPIMAGE_EXTRACT_AND_RUN: "1" # no FUSE on the runner
-          OUTPUT: skytrace-${{ github.ref_name }}-x86_64.AppImage
+          OUTPUT: skytrace-x86_64.AppImage
         run: |
           curl -fsSL -o linuxdeploy https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
           chmod +x linuxdeploy
@@ -45,7 +45,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: linux-appimage
-          path: skytrace-*-x86_64.AppImage
+          path: skytrace-x86_64.AppImage
           if-no-files-found: error
 
   windows:
@@ -58,11 +58,11 @@ jobs:
       - run: cargo build --release --locked
       - name: Rename binary
         shell: bash
-        run: cp target/release/skytrace.exe "skytrace-${GITHUB_REF_NAME}-windows-x86_64.exe"
+        run: cp target/release/skytrace.exe skytrace-windows-x86_64.exe
       - uses: actions/upload-artifact@v4
         with:
           name: windows-exe
-          path: skytrace-*-windows-x86_64.exe
+          path: skytrace-windows-x86_64.exe
           if-no-files-found: error
 
   release:

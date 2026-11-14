@@ -8,6 +8,8 @@ use std::f64::consts::PI;
 pub const TILE_SIZE: f64 = 256.0;
 pub const MIN_ZOOM: f64 = 2.0;
 pub const MAX_ZOOM: f64 = 18.0;
+/// Extra radius (nm) queried beyond the visible area.
+pub const QUERY_MARGIN_NM: u32 = 10;
 /// Web Mercator latitude limit.
 pub const MAX_LAT: f64 = 85.051_128_78;
 
@@ -138,7 +140,9 @@ impl View {
     pub fn query(&self) -> Query {
         let (clat, clon) = self.unproject(0.0, 0.0);
         let r_m = distance_m(self.lat, self.lon, clat, clon) * 1.05;
-        let radius_nm = ((r_m / NM_M).ceil() as u32).clamp(1, MAX_RADIUS_NM);
+        // A small margin so aircraft about to enter the view are already known
+        // (otherwise a zoomed-in view stays empty until a plane is inside it).
+        let radius_nm = ((r_m / NM_M).ceil() as u32 + QUERY_MARGIN_NM).clamp(1, MAX_RADIUS_NM);
         Query {
             lat: self.lat,
             lon: self.lon,
@@ -332,6 +336,20 @@ mod tests {
         assert!(tiles.len() <= 80);
         assert!(tiles.iter().all(|t| t.key.x < 8 && t.key.y < 8));
         assert!(tiles.iter().any(|t| t.key.x == 0) && tiles.iter().any(|t| t.key.x == 7));
+    }
+
+    #[test]
+    fn zoomed_in_query_has_margin_but_stays_local() {
+        let v = View {
+            zoom: 13.0,
+            ..view()
+        };
+        let q = v.query();
+        assert!(
+            q.radius_nm > QUERY_MARGIN_NM && q.radius_nm <= QUERY_MARGIN_NM + 10,
+            "{}",
+            q.radius_nm
+        );
     }
 
     #[test]

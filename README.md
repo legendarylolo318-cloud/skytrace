@@ -16,14 +16,14 @@ Prebuilt binaries are attached to each [GitHub Release](https://github.com/legen
 
 | Platform | File |
 |---|---|
-| Linux x86_64 | [`skytrace-v0.1.0-x86_64.AppImage`](https://github.com/legendarylolo318-cloud/skytrace/releases/download/v0.1.0/skytrace-v0.1.0-x86_64.AppImage) |
-| Windows x86_64 | [`skytrace-v0.1.0-windows-x86_64.exe`](https://github.com/legendarylolo318-cloud/skytrace/releases/download/v0.1.0/skytrace-v0.1.0-windows-x86_64.exe) |
+| Linux x86_64 | [`skytrace-x86_64.AppImage`](https://github.com/legendarylolo318-cloud/skytrace/releases/latest/download/skytrace-x86_64.AppImage) |
+| Windows x86_64 | [`skytrace-windows-x86_64.exe`](https://github.com/legendarylolo318-cloud/skytrace/releases/latest/download/skytrace-windows-x86_64.exe) |
 
 `SHA256SUMS.txt` is published alongside them.
 
 ```bash
-chmod +x skytrace-v0.1.0-x86_64.AppImage
-./skytrace-v0.1.0-x86_64.AppImage
+chmod +x skytrace-x86_64.AppImage
+./skytrace-x86_64.AppImage
 ```
 
 The Windows build is a portable, unsigned `.exe` (no installer, no console window). SmartScreen
@@ -48,7 +48,8 @@ may ask for confirmation on first start.
 - Live aircraft from **adsb.lol**, with automatic failover to **adsb.fi** (and optionally **OpenSky**),
   behind a `FlightSource` trait. Each source has its own exponential backoff and honours
   `Retry-After` / `X-Rate-Limit-Retry-After-Seconds`.
-- Only the visible map area is queried (centre + radius, max 250 nm; OpenSky uses the bounding box).
+- Only the visible map area (plus a 10 nm margin) is queried (centre + radius, max 250 nm; OpenSky
+  uses the bounding box). An empty area says so in the status bar instead of showing a blank map.
   Default poll every 5 s, minimum 2 s. Per-source request spacing is enforced (adsb.fi ≤ 1 req/s,
   OpenSky ≥ 30 s apart to stay within its anonymous credit budget).
 - Dead reckoning (track + ground speed, including the age of each position) between polls.

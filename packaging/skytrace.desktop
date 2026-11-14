@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=skytrace
+GenericName=Flight Tracker
+Comment=Live flight tracker
+Exec=skytrace
+Icon=skytrace
+Terminal=false
+Categories=Network;
+Keywords=flight;aircraft;ads-b;radar;
+StartupWMClass=skytrace

@@ -1,0 +1,6 @@
+{"time":1700000000,"states":[
+ ["a1b2c3","UAL12   ","United States",1700000000,1700000000,-111.9,33.5,10000.0,false,200.0,90.0,5.08,null,10100.0,"2000",false,0],
+ ["abcdef","",  "Germany",null,1700000000,null,null,null,true,null,null,null,null,null,null,false,0],
+ ["123456","GRND1   ","Spain",1700000000,1700000000,-112.1,33.4,null,true,5.0,180.0,null,null,null,"7600",false,0],
+ "bad"
+]}

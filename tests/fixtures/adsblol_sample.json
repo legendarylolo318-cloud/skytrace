@@ -1,0 +1,17 @@
+{
+  "ac": [
+    {"hex":"a1b2c3","type":"adsb_icao","flight":"SWA1234 ","r":"N8620H","t":"B738","alt_baro":34000,"alt_geom":34650,"gs":451.2,"track":87.4,"baro_rate":-64,"squawk":"1200","emergency":"none","lat":33.5012,"lon":-111.9001,"seen_pos":0.4,"dbFlags":0},
+    {"hex":"ae1234","flight":"RCH401  ","r":"08-8201","t":"C17","alt_baro":"ground","gs":12.5,"track":270.0,"lat":33.43,"lon":-112.01,"seen_pos":1.2,"dbFlags":1,"squawk":"7700","emergency":"general"},
+    {"hex":"~abcdef","alt_baro":5000,"lat":33.0,"lon":-112.5},
+    {"hex":"nopos1","flight":"NOPOS   ","alt_baro":10000},
+    {"hex":"lastpo","flight":"LASTP","alt_baro":12000,"lastPosition":{"lat":34.1,"lon":-111.5,"seen_pos":20.5}},
+    {"hex":"strnum","flight":"STR1","alt_baro":"8000","gs":"250","track":"abc","lat":"33.2","lon":-112.2},
+    "garbage",
+    {"flight":"NOHEX","lat":1.0,"lon":1.0}
+  ],
+  "msg": "No error",
+  "now": 1700000000000,
+  "total": 8,
+  "ctime": 1700000000100,
+  "ptime": 3
+}

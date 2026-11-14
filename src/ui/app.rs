@@ -98,6 +98,7 @@ struct App {
     last_tiles: Vec<TileKey>,
     last_trail: String,
     basemap_visible: bool,
+    tiles_missing: bool,
     alert: Option<(String, Instant)>,
     alert_hex: Option<String>,
     // tiles
@@ -271,6 +272,7 @@ fn build(rt: &tokio::runtime::Handle, client: reqwest::Client, env: Env) -> Resu
         last_tiles: Vec::new(),
         last_trail: String::new(),
         basemap_visible: true,
+        tiles_missing: true,
         alert: None,
         alert_hex: None,
         tile_service,
@@ -762,6 +764,13 @@ impl App {
                 self.tile_failed.remove(&d.key);
                 self.render_tiles();
             }
+            // Skipped because it left the view while queued: not an error. If it
+            // is visible again by now, request it right away.
+            None if d.skipped => {
+                if self.view.visible_tiles().iter().any(|t| t.key == d.key) {
+                    self.render_tiles();
+                }
+            }
             None => {
                 let now = Instant::now();
                 // bounded: forget failures old enough to be retried anyway
@@ -835,6 +844,19 @@ impl App {
 
     fn tick(&mut self) {
         let now = Instant::now();
+        // Retry tiles whose earlier failure has expired without waiting for the
+        // user to move the map (requests are de-duplicated by the tile service).
+        if self.tiles_missing
+            && self.view.visible_tiles().iter().any(|t| {
+                !self.tile_cache.contains(&t.key)
+                    && self
+                        .tile_failed
+                        .get(&t.key)
+                        .is_none_or(|at| now.duration_since(*at) > TILE_RETRY)
+            })
+        {
+            self.render_tiles();
+        }
         self.planes
             .retain(|_, t| now.duration_since(t.received) < STALE_AFTER);
         if self.alert.as_ref().is_some_and(|(_, until)| now >= *until) {
@@ -898,6 +920,7 @@ impl App {
             }
         }
         let covered = !placed.is_empty() && items.len() == placed.len();
+        self.tiles_missing = !covered;
         self.push_tiles(items, &placed);
         if covered == self.basemap_visible {
             self.basemap_visible = !covered;
@@ -1465,12 +1488,33 @@ mod tests {
                     a.on_tile(Decoded {
                         generation: gen_,
                         key: t.key,
+                        skipped: false,
                         pixels: Some(px),
                     });
                 }
             })
         };
         assert!(win.get_basemap_visible());
+        // a tile skipped while panning is not treated as failed; a real failure is
+        with_app(|a| {
+            let gen_ = a.tile_gen;
+            let keys: Vec<_> = a.view.visible_tiles().iter().map(|t| t.key).collect();
+            a.on_tile(Decoded {
+                generation: gen_,
+                key: keys[0],
+                pixels: None,
+                skipped: true,
+            });
+            assert!(!a.tile_failed.contains_key(&keys[0]));
+            a.on_tile(Decoded {
+                generation: gen_,
+                key: keys[1],
+                pixels: None,
+                skipped: false,
+            });
+            assert!(a.tile_failed.contains_key(&keys[1]));
+            a.tile_failed.clear();
+        });
         fill_tiles();
         assert!(!win.get_basemap_visible(), "tiles cover the view");
         let n_tiles = win.get_tiles().row_count();

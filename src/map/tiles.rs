@@ -24,6 +24,9 @@ pub struct Decoded {
     pub key: TileKey,
     /// `None` when the tile could not be loaded.
     pub pixels: Option<SharedPixelBuffer<Rgba8Pixel>>,
+    /// True when the download was skipped because the tile scrolled out of
+    /// view while queued. That is not a failure and must not delay a retry.
+    pub skipped: bool,
 }
 
 pub type TileSink = Arc<dyn Fn(Decoded) + Send + Sync>;
@@ -128,12 +131,13 @@ impl TileService {
         let (client, sem, sink) = (self.client.clone(), self.sem.clone(), self.sink.clone());
         let (in_flight, wanted) = (self.in_flight.clone(), self.wanted.clone());
         self.rt.spawn(async move {
-            let pixels = load(&client, &sem, &wanted, key, &url, &path).await;
+            let (pixels, skipped) = load(&client, &sem, &wanted, key, &url, &path).await;
             lock(&in_flight).remove(&(generation, key));
             sink(Decoded {
                 generation,
                 key,
                 pixels,
+                skipped,
             });
         });
     }
@@ -146,7 +150,7 @@ async fn load(
     key: TileKey,
     url: &str,
     path: &PathBuf,
-) -> Option<SharedPixelBuffer<Rgba8Pixel>> {
+) -> (Option<SharedPixelBuffer<Rgba8Pixel>>, bool) {
     let cached = tokio::fs::read(path).await.ok();
     let fresh = tokio::fs::metadata(path)
         .await
@@ -157,13 +161,19 @@ async fn load(
     if let (Some(bytes), true) = (&cached, fresh)
         && let Some(px) = decode_blocking(bytes.clone()).await
     {
-        return Some(px);
+        return (Some(px), false);
     }
-    let permit = sem.acquire().await.ok()?;
+    let Ok(permit) = sem.acquire().await else {
+        return (None, true);
+    };
     if !lock(wanted).contains(&key) {
         // scrolled away while queued: serve stale data if any, never hit the network
         drop(permit);
-        return decode_blocking(cached?).await;
+        let stale = match cached {
+            Some(b) => decode_blocking(b).await,
+            None => None,
+        };
+        return (stale, true);
     }
     let fetched = async {
         let resp = client.get(url).send().await.ok()?;
@@ -185,9 +195,14 @@ async fn load(
         if tokio::fs::write(&tmp, &bytes).await.is_ok() {
             let _ = tokio::fs::rename(&tmp, path).await;
         }
-        return Some(px);
+        return (Some(px), false);
     }
-    decode_blocking(cached?).await // network failed: stale tile beats no tile
+    // network failed: a stale tile beats no tile
+    let stale = match cached {
+        Some(b) => decode_blocking(b).await,
+        None => None,
+    };
+    (stale, false)
 }
 
 async fn decode_blocking(bytes: Vec<u8>) -> Option<SharedPixelBuffer<Rgba8Pixel>> {

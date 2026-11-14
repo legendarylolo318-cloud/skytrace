@@ -72,6 +72,7 @@ export component MainWindow inherits Window {
     in property <string> coast-path;
     in property <string> border-path;
     in property <string> trail-path;
+    in property <bool> basemap-visible: true;
     in property <string> hover-text;
     in property <length> hover-x;
     in property <length> hover-y;
@@ -141,14 +142,14 @@ export component MainWindow inherits Window {
                 changed width => { root.map-resized(self.width / 1px, self.height / 1px); }
                 changed height => { root.map-resized(self.width / 1px, self.height / 1px); }
 
-                // Offline basemap (Natural Earth), always drawn under the tiles.
-                Path {
+                // Offline basemap (Natural Earth): only while tiles don't cover the view.
+                if root.basemap-visible: Path {
                     width: parent.width; height: parent.height;
                     viewbox-width: self.width / 1px; viewbox-height: self.height / 1px;
                     commands: root.border-path;
                     stroke: AppTheme.border; stroke-width: 1px;
                 }
-                Path {
+                if root.basemap-visible: Path {
                     width: parent.width; height: parent.height;
                     viewbox-width: self.width / 1px; viewbox-height: self.height / 1px;
                     commands: root.coast-path;

@@ -6,7 +6,7 @@
 use super::{KV, MainWindow, PlaneItem, TileItem, format as fmt};
 use crate::config::{Config, MIN_POLL_SECS, SourceChoice, Theme, Units, valid_tile_url};
 use crate::map::coast::{Basemap, polyline};
-use crate::map::projection::{MAX_ZOOM, TileKey, View};
+use crate::map::projection::{MAX_ZOOM, PlacedTile, TileKey, View};
 use crate::map::tiles::{Decoded, TileService};
 use crate::model::aircraft::{Tracked, Trail};
 use crate::model::filter::Filter;
@@ -95,6 +95,9 @@ struct App {
     system_scheme: slint::language::ColorScheme,
     last_planes: Vec<PlaneItem>,
     last_rows: Vec<KV>,
+    last_tiles: Vec<TileKey>,
+    last_trail: String,
+    basemap_visible: bool,
     alert: Option<(String, Instant)>,
     alert_hex: Option<String>,
     // tiles
@@ -265,6 +268,9 @@ fn build(rt: &tokio::runtime::Handle, client: reqwest::Client, env: Env) -> Resu
         system_scheme: detect_scheme(&win),
         last_planes: Vec::new(),
         last_rows: Vec::new(),
+        last_tiles: Vec::new(),
+        last_trail: String::new(),
+        basemap_visible: true,
         alert: None,
         alert_hex: None,
         tile_service,
@@ -531,6 +537,7 @@ impl App {
             self.tile_gen += 1;
             self.tile_cache.clear();
             self.tile_failed.clear();
+            self.last_tiles.clear();
             self.apply_attribution();
         }
         self.push_params(true);
@@ -855,10 +862,15 @@ impl App {
         self.render_planes();
     }
 
+    /// Offline basemap. Skipped while tiles cover the whole view: those vector
+    /// paths would otherwise be rebuilt and re-tessellated under opaque tiles.
     fn render_paths(&self) {
         let Some(win) = self.win.upgrade() else {
             return;
         };
+        if !self.basemap_visible {
+            return;
+        }
         win.set_coast_path(self.basemap.coast_path(&self.view).into());
         win.set_border_path(self.basemap.border_path(&self.view).into());
     }
@@ -885,7 +897,47 @@ impl App {
                     .request(self.tile_gen, &self.cfg.tile_url, t.key);
             }
         }
-        self.tile_model.set_vec(items);
+        let covered = !placed.is_empty() && items.len() == placed.len();
+        self.push_tiles(items, &placed);
+        if covered == self.basemap_visible {
+            self.basemap_visible = !covered;
+            if let Some(win) = self.win.upgrade() {
+                win.set_basemap_visible(self.basemap_visible);
+            }
+            self.render_paths();
+        }
+    }
+
+    /// Update the tile model in place where possible: `set_vec` makes Slint
+    /// destroy and recreate every tile element, which happened on each pan
+    /// event and for every single tile that finished loading.
+    fn push_tiles(&mut self, items: Vec<TileItem>, placed: &[PlacedTile]) {
+        let keys: Vec<TileKey> = placed
+            .iter()
+            .filter(|t| self.tile_cache.contains(&t.key))
+            .map(|t| t.key)
+            .collect();
+        if keys.len() != self.last_tiles.len() || keys != self.last_tiles {
+            if keys.len() == self.last_tiles.len() {
+                // same number of tiles, some replaced (e.g. after panning one column)
+                for (i, item) in items.into_iter().enumerate() {
+                    self.tile_model.set_row_data(i, item);
+                }
+            } else {
+                self.tile_model.set_vec(items);
+            }
+            self.last_tiles = keys;
+            return;
+        }
+        // same tiles, maybe moved: only touch rows whose geometry changed
+        use slint::Model;
+        for (i, item) in items.into_iter().enumerate() {
+            if let Some(old) = self.tile_model.row_data(i)
+                && (old.x != item.x || old.y != item.y || old.size != item.size)
+            {
+                self.tile_model.set_row_data(i, item);
+            }
+        }
     }
 
     fn render_planes(&mut self) {
@@ -966,7 +1018,10 @@ impl App {
                 polyline(&pts, &self.view)
             })
             .unwrap_or_default();
-        win.set_trail_path(trail.into());
+        if trail != self.last_trail {
+            win.set_trail_path(trail.as_str().into());
+            self.last_trail = trail;
+        }
 
         self.update_panel(&win, now);
         self.update_stats(&win, visible);
@@ -1376,6 +1431,39 @@ mod tests {
                 "{t:?}"
             );
         }
+
+        // --- tiles: once every visible tile is loaded the basemap is hidden, and
+        // panning updates rows in place instead of rebuilding the model
+        let fill_tiles = || {
+            with_app(|a| {
+                let gen_ = a.tile_gen;
+                for t in a.view.visible_tiles() {
+                    let px = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(4, 4);
+                    a.on_tile(Decoded {
+                        generation: gen_,
+                        key: t.key,
+                        pixels: Some(px),
+                    });
+                }
+            })
+        };
+        assert!(win.get_basemap_visible());
+        fill_tiles();
+        assert!(!win.get_basemap_visible(), "tiles cover the view");
+        let n_tiles = win.get_tiles().row_count();
+        assert!(n_tiles > 0);
+        win.invoke_map_down(400.0, 300.0);
+        win.invoke_map_move(410.0, 305.0);
+        win.invoke_map_move(420.0, 310.0);
+        win.invoke_map_up(420.0, 310.0);
+        assert_eq!(win.get_tiles().row_count(), n_tiles);
+        // pan a long way: uncovered area -> basemap comes back with fresh paths
+        win.invoke_map_down(0.0, 0.0);
+        win.invoke_map_move(900.0, 600.0);
+        win.invoke_map_up(900.0, 600.0);
+        assert!(win.get_basemap_visible());
+        fill_tiles();
+        assert!(!win.get_basemap_visible());
 
         // --- home button returns to the saved home
         win.invoke_go_home();

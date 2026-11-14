@@ -87,9 +87,11 @@ struct Raw {
 }
 
 #[derive(Debug, Deserialize)]
-struct Response {
-    #[serde(alias = "aircraft")]
-    ac: Option<Vec<Value>>,
+struct Response<'a> {
+    /// Kept as raw slices so each entry is parsed exactly once, and a malformed
+    /// entry only drops that entry (instead of building a `Value` tree first).
+    #[serde(alias = "aircraft", borrow)]
+    ac: Option<Vec<&'a serde_json::value::RawValue>>,
 }
 
 /// Parse an ADS-B Exchange v2 response body. Entries without a usable
@@ -97,9 +99,10 @@ struct Response {
 pub fn parse_response(body: &str, source: &'static str) -> Result<Vec<Aircraft>, SourceError> {
     let resp: Response =
         serde_json::from_str(body).map_err(|e| SourceError::Parse(e.to_string()))?;
-    let mut out = Vec::new();
-    for v in resp.ac.unwrap_or_default() {
-        let Ok(raw) = serde_json::from_value::<Raw>(v) else {
+    let entries = resp.ac.unwrap_or_default();
+    let mut out = Vec::with_capacity(entries.len());
+    for v in entries {
+        let Ok(raw) = serde_json::from_str::<Raw>(v.get()) else {
             continue;
         };
         if let Some(a) = convert(raw, source) {

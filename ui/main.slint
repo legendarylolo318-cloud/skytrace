@@ -108,6 +108,8 @@ export component MainWindow inherits Window {
     in-out property <int> s-theme;
     in-out property <int> s-source;
     in-out property <bool> s-opensky;
+    in-out property <float> s-preload: 250;
+    in-out property <bool> s-adaptive: true;
     in-out property <string> s-tile-url;
     in-out property <string> s-lat;
     in-out property <string> s-lon;
@@ -353,7 +355,7 @@ export component MainWindow inherits Window {
         background: #00000080;
         TouchArea { }
         Panel {
-            width: min(520px, parent.width - 40px); height: 470px;
+            width: min(620px, parent.width - 40px); height: min(600px, parent.height - 40px);
             background: AppTheme.bar;
             VerticalLayout {
                 padding: 18px; spacing: 10px;
@@ -365,6 +367,15 @@ export component MainWindow inherits Window {
                 Field { label: "Units"; ComboBox { model: ["Imperial (ft, kt)", "Metric (m, km/h)"]; current-index <=> root.s-units; } }
                 Field { label: "Theme"; ComboBox { model: ["System", "Light", "Dark", "Midnight", "Sepia", "High contrast"]; current-index <=> root.s-theme; } }
                 Field { label: "Data source"; ComboBox { model: ["Automatic (adsb.lol, adsb.fi)", "adsb.lol", "adsb.fi", "OpenSky"]; current-index <=> root.s-source; } }
+                Field {
+                    label: root.s-preload < 5 ? "Preload: off" : "Preload " + Math.round(root.s-preload / 10) * 10 + " nm";
+                    Slider { minimum: 0; maximum: 250; value <=> root.s-preload; }
+                }
+                Field { label: "Zoomed-in refresh"; Switch { text: "Faster when zoomed in (down to 2 s)"; checked <=> root.s-adaptive; } }
+                Text {
+                    text: "Preload fills the map on start and keeps planes around the view (refreshed every 30 s). Off = only the visible area is loaded.";
+                    color: AppTheme.muted; font-size: 11px; wrap: word-wrap;
+                }
                 Field { label: "OpenSky fallback"; Switch { text: "Enable (non-commercial, credit-limited)"; checked <=> root.s-opensky; } }
                 Field { label: "Tile URL"; LineEdit { text <=> root.s-tile-url; } }
                 Field {

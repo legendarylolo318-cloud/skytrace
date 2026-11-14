@@ -48,8 +48,15 @@ may ask for confirmation on first start.
 - Live aircraft from **adsb.lol**, with automatic failover to **adsb.fi** (and optionally **OpenSky**),
   behind a `FlightSource` trait. Each source has its own exponential backoff and honours
   `Retry-After` / `X-Rate-Limit-Retry-After-Seconds`.
-- Only the visible map area (plus a 10 nm margin) is queried (centre + radius, max 250 nm; OpenSky
-  uses the bounding box). An empty area says so in the status bar instead of showing a blank map.
+- **Preload + adaptive refresh** (both configurable in ⚙ Settings):
+  - *Preload radius* (default 250 nm, 0 = off): on start and every 30 s, a wide circle around the
+    view is loaded, so the map isn't empty on first open and planes are already there when you zoom
+    in or pan.
+  - *Faster when zoomed in* (default on): between wide refreshes only the visible area (+10 nm) is
+    polled, and the further you zoom in the more often (your poll interval when zoomed out, down to
+    2 s). Aircraft outside the refreshed area are kept until the next wide refresh.
+  - With preload off, only the visible area is ever queried (centre + radius, max 250 nm; OpenSky
+    uses the bounding box). An empty area says so in the status bar instead of showing a blank map.
   Default poll every 5 s, minimum 2 s. Per-source request spacing is enforced (adsb.fi ≤ 1 req/s,
   OpenSky ≥ 30 s apart to stay within its anonymous credit budget).
 - Dead reckoning (track + ground speed, including the age of each position) between polls.

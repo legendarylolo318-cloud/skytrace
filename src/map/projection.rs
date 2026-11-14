@@ -46,6 +46,33 @@ pub fn latlon_to_tile(lat: f64, lon: f64, z: u8) -> TileKey {
     }
 }
 
+/// A query for a circle of `radius_nm` around a point, with its bounding box
+/// (used by OpenSky). Boxes crossing a pole or the antimeridian are widened.
+pub fn circle_query(lat: f64, lon: f64, radius_nm: u32) -> Query {
+    let radius_nm = radius_nm.clamp(1, MAX_RADIUS_NM);
+    let dlat = f64::from(radius_nm) / 60.0;
+    let (min_lat, max_lat) = ((lat - dlat).max(-90.0), (lat + dlat).min(90.0));
+    let cos = lat.to_radians().cos().max(0.01);
+    let dlon = dlat / cos;
+    let (min_lon, max_lon) =
+        if max_lat >= 89.0 || min_lat <= -89.0 || lon - dlon < -180.0 || lon + dlon > 180.0 {
+            (-180.0, 180.0)
+        } else {
+            (lon - dlon, lon + dlon)
+        };
+    Query {
+        lat,
+        lon,
+        radius_nm,
+        bbox: BBox {
+            min_lat,
+            min_lon,
+            max_lat,
+            max_lon,
+        },
+    }
+}
+
 /// Fill a `{z}/{x}/{y}` URL template.
 pub fn tile_url(template: &str, k: TileKey) -> String {
     template
@@ -136,13 +163,18 @@ impl View {
         }
     }
 
-    /// Circle (centre + radius) covering the viewport, capped to the API limit.
-    pub fn query(&self) -> Query {
+    /// Radius (nm) of the circle around the centre that just covers the view.
+    pub fn visible_radius_nm(&self) -> u32 {
         let (clat, clon) = self.unproject(0.0, 0.0);
         let r_m = distance_m(self.lat, self.lon, clat, clon) * 1.05;
+        (r_m / NM_M).ceil() as u32
+    }
+
+    /// Circle (centre + radius) covering the viewport, capped to the API limit.
+    pub fn query(&self) -> Query {
         // A small margin so aircraft about to enter the view are already known
         // (otherwise a zoomed-in view stays empty until a plane is inside it).
-        let radius_nm = ((r_m / NM_M).ceil() as u32 + QUERY_MARGIN_NM).clamp(1, MAX_RADIUS_NM);
+        let radius_nm = (self.visible_radius_nm() + QUERY_MARGIN_NM).clamp(1, MAX_RADIUS_NM);
         Query {
             lat: self.lat,
             lon: self.lon,
@@ -350,6 +382,17 @@ mod tests {
             "{}",
             q.radius_nm
         );
+    }
+
+    #[test]
+    fn circle_query_bbox() {
+        let q = circle_query(33.0, -112.0, 120);
+        assert_eq!(q.radius_nm, 120);
+        assert!((q.bbox.max_lat - 35.0).abs() < 1e-9 && (q.bbox.min_lat - 31.0).abs() < 1e-9);
+        assert!(q.bbox.min_lon < -114.0 && q.bbox.max_lon > -110.0);
+        let edge = circle_query(10.0, 179.0, 200);
+        assert_eq!((edge.bbox.min_lon, edge.bbox.max_lon), (-180.0, 180.0));
+        assert_eq!(circle_query(0.0, 0.0, 9999).radius_nm, MAX_RADIUS_NM);
     }
 
     #[test]

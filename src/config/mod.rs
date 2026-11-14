@@ -83,7 +83,16 @@ pub struct Config {
     pub source: SourceChoice,
     pub opensky_enabled: bool,
     pub tile_url: String,
+    /// Wide area (nm around the view) loaded on start and refreshed every 30 s
+    /// so the map is not empty and zooming in has planes ready. 0 = visible area only.
+    pub preload_radius_nm: u32,
+    /// Poll the visible area more often the further the map is zoomed in.
+    pub adaptive_refresh: bool,
 }
+
+/// Largest preload radius (the ADS-B APIs' maximum query radius).
+pub const MAX_PRELOAD_NM: u32 = 250;
+pub const DEFAULT_PRELOAD_NM: u32 = 250;
 
 impl Default for Config {
     fn default() -> Self {
@@ -98,6 +107,8 @@ impl Default for Config {
             source: SourceChoice::default(),
             opensky_enabled: false,
             tile_url: DEFAULT_TILE_URL.to_string(),
+            preload_radius_nm: DEFAULT_PRELOAD_NM,
+            adaptive_refresh: true,
         }
     }
 }
@@ -112,6 +123,7 @@ impl Config {
         self.home_lat = finite(self.home_lat, d.home_lat).clamp(-85.0, 85.0);
         self.home_lon = finite(self.home_lon, d.home_lon).clamp(-180.0, 180.0);
         self.home_zoom = finite(self.home_zoom, d.home_zoom).clamp(3.0, 15.0);
+        self.preload_radius_nm = self.preload_radius_nm.min(MAX_PRELOAD_NM);
         if !valid_tile_url(&self.tile_url) {
             self.tile_url = d.tile_url;
         }
@@ -264,6 +276,24 @@ mod tests {
         let c: Config = toml::from_str("source = \"airplanes_live\"\nunits = \"metric\"").unwrap();
         assert_eq!(c.source, SourceChoice::AdsbFi);
         assert_eq!(c.units, Units::Metric);
+    }
+
+    #[test]
+    fn preload_defaults_and_clamp() {
+        let c: Config = toml::from_str("poll_interval_secs = 5").unwrap();
+        assert_eq!(
+            (c.preload_radius_nm, c.adaptive_refresh),
+            (DEFAULT_PRELOAD_NM, true)
+        );
+        let mut c = Config {
+            preload_radius_nm: 9000,
+            ..Config::default()
+        };
+        c.sanitize();
+        assert_eq!(c.preload_radius_nm, MAX_PRELOAD_NM);
+        let off: Config =
+            toml::from_str("preload_radius_nm = 0\nadaptive_refresh = false").unwrap();
+        assert_eq!((off.preload_radius_nm, off.adaptive_refresh), (0, false));
     }
 
     #[test]

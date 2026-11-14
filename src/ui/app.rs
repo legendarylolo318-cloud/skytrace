@@ -6,14 +6,14 @@
 use super::{KV, MainWindow, PlaneItem, TileItem, format as fmt};
 use crate::config::{Config, MIN_POLL_SECS, SourceChoice, Theme, Units, valid_tile_url};
 use crate::map::coast::{Basemap, polyline};
-use crate::map::projection::{MAX_ZOOM, PlacedTile, TileKey, View};
+use crate::map::projection::{MAX_ZOOM, PlacedTile, TileKey, View, circle_query};
 use crate::map::tiles::{Decoded, TileService};
 use crate::model::aircraft::{Tracked, Trail};
 use crate::model::filter::Filter;
 use crate::model::geo::{NM_M, distance_m};
 use crate::model::meta::{AircraftInfo, RouteInfo};
 use crate::sources::adsbdb::AdsbDb;
-use crate::sources::poller::{self, PollEvent, PollParams};
+use crate::sources::poller::{self, PollEvent, PollParams, adaptive_interval};
 use anyhow::Result;
 use lru::LruCache;
 use slint::{
@@ -151,6 +151,25 @@ fn detect_scheme(win: &MainWindow) -> slint::language::ColorScheme {
     }
 }
 
+/// Poll parameters for a config and view: the visible area, the optional wide
+/// preload area and the (zoom-dependent) interval.
+fn poll_params(cfg: &Config, view: &View) -> PollParams {
+    let query = view.query();
+    let wide = (cfg.preload_radius_nm > query.radius_nm)
+        .then(|| circle_query(view.lat, view.lon, cfg.preload_radius_nm));
+    PollParams {
+        interval: adaptive_interval(
+            Duration::from_secs(cfg.poll_interval_secs),
+            view.visible_radius_nm(),
+            cfg.adaptive_refresh,
+        ),
+        query,
+        wide,
+        source: cfg.source,
+        opensky: cfg.opensky_enabled,
+    }
+}
+
 fn opt_f(v: Option<f64>, f: impl Fn(f64) -> String) -> String {
     v.map_or_else(|| "—".to_string(), f)
 }
@@ -202,12 +221,7 @@ fn build(rt: &tokio::runtime::Handle, client: reqwest::Client, env: Env) -> Resu
         height: 700.0,
     };
 
-    let (params_tx, params_rx) = watch::channel(PollParams {
-        query: view.query(),
-        interval: Duration::from_secs(cfg.poll_interval_secs),
-        source: cfg.source,
-        opensky: cfg.opensky_enabled,
-    });
+    let (params_tx, params_rx) = watch::channel(poll_params(&cfg, &view));
     let refresh = Arc::new(Notify::new());
     if online {
         poller::spawn(
@@ -474,6 +488,8 @@ impl App {
             SourceChoice::OpenSky => 3,
         });
         win.set_s_opensky(self.cfg.opensky_enabled);
+        win.set_s_preload(self.cfg.preload_radius_nm as f32);
+        win.set_s_adaptive(self.cfg.adaptive_refresh);
         win.set_s_tile_url(self.cfg.tile_url.clone().into());
         win.set_s_lat(format!("{:.5}", self.cfg.home_lat).into());
         win.set_s_lon(format!("{:.5}", self.cfg.home_lon).into());
@@ -518,6 +534,9 @@ impl App {
             _ => SourceChoice::Auto,
         };
         self.cfg.opensky_enabled = win.get_s_opensky();
+        // snap to 10 nm steps; 0 turns preloading off
+        self.cfg.preload_radius_nm = ((win.get_s_preload().max(0.0) / 10.0).round() as u32) * 10;
+        self.cfg.adaptive_refresh = win.get_s_adaptive();
         self.cfg.tile_url = tile_url;
         self.cfg.sanitize();
         let saved = match &self.config_path {
@@ -564,14 +583,9 @@ impl App {
     }
 
     fn push_params(&mut self, notify: bool) {
-        let q = self.view.query();
-        self.last_query = Some(q.clone());
-        self.params_tx.send_replace(PollParams {
-            query: q,
-            interval: Duration::from_secs(self.cfg.poll_interval_secs),
-            source: self.cfg.source,
-            opensky: self.cfg.opensky_enabled,
-        });
+        let p = poll_params(&self.cfg, &self.view);
+        self.last_query = Some(p.query.clone());
+        self.params_tx.send_replace(p);
         if notify {
             self.refresh.notify_one();
         }
@@ -592,7 +606,9 @@ impl App {
         if notify {
             self.push_params(true);
         } else {
-            self.params_tx.send_modify(|p| p.query = q);
+            // keep the area/interval current without forcing an extra request
+            self.params_tx
+                .send_replace(poll_params(&self.cfg, &self.view));
         }
     }
 
@@ -788,6 +804,7 @@ impl App {
                 aircraft,
                 source,
                 fallback,
+                area,
             } => {
                 let mut seen = HashSet::with_capacity(aircraft.len());
                 for ac in aircraft {
@@ -808,7 +825,15 @@ impl App {
                     self.planes
                         .insert(ac.hex.clone(), Tracked { ac, received: now });
                 }
-                self.planes.retain(|k, _| seen.contains(k));
+                // Only aircraft inside the polled area can be "gone"; the ones
+                // outside (from a wider preload poll) stay until refreshed or stale.
+                let reach_m = f64::from(area.radius_nm) * NM_M;
+                self.planes.retain(|k, t| {
+                    seen.contains(k) || {
+                        let (lat, lon) = t.position_now(now);
+                        distance_m(area.lat, area.lon, lat, lon) > reach_m
+                    }
+                });
                 self.trails.retain(|_, t| {
                     t.last_seen
                         .is_some_and(|s| now.duration_since(s) < Duration::from_secs(600))
@@ -1269,6 +1294,11 @@ mod tests {
         .unwrap()
     }
 
+    /// A whole-region area, so every fixture aircraft is inside it.
+    fn region() -> crate::sources::Query {
+        circle_query(33.45, -112.07, 250)
+    }
+
     fn feed(source: &'static str, fallback: bool) {
         let aircraft = parse_response(SAMPLE, source).unwrap();
         with_app(|a| {
@@ -1276,6 +1306,7 @@ mod tests {
                 aircraft,
                 source,
                 fallback,
+                area: region(),
             })
         });
     }
@@ -1322,6 +1353,7 @@ mod tests {
                 aircraft: vec![],
                 source: "adsb.lol",
                 fallback: false,
+                area: region(),
             })
         });
         assert_eq!(plane_count(&win), 0);
@@ -1332,6 +1364,41 @@ mod tests {
         );
         feed("adsb.lol", false);
         assert!(!win.get_status_text().contains("zoom out"));
+
+        // a small-area poll only removes aircraft inside that area: the plane at
+        // the small circle's centre is gone, the four outside it stay
+        with_app(|a| {
+            a.on_poll(PollEvent::Update {
+                aircraft: vec![],
+                source: "adsb.lol",
+                fallback: false,
+                area: circle_query(33.5012, -111.9001, 2),
+            })
+        });
+        assert_eq!(plane_count(&win), 4);
+        assert!(with_app(|a| !a.planes.contains_key("a1b2c3")).unwrap());
+        feed("adsb.lol", false);
+
+        // default config: a 250 nm wide preload around the ~177 nm test view;
+        // zooming in keeps it and shortens the interval
+        let p = with_app(|a| a.params_tx.borrow().clone()).unwrap();
+        assert_eq!(p.wide.as_ref().map(|w| w.radius_nm), Some(250), "{p:?}");
+        assert_eq!(p.interval, Duration::from_secs(5));
+        win.invoke_zoom_in();
+        win.invoke_zoom_in();
+        let p = with_app(|a| a.params_tx.borrow().clone()).unwrap();
+        assert_eq!(
+            p.wide.as_ref().map(|w| w.radius_nm),
+            Some(crate::config::DEFAULT_PRELOAD_NM)
+        );
+        assert!(p.query.radius_nm < 60);
+        assert!(
+            p.interval < Duration::from_secs(5),
+            "faster when zoomed in: {:?}",
+            p.interval
+        );
+        win.invoke_zoom_out();
+        win.invoke_zoom_out();
 
         // same data again: nothing is re-pushed, model stays stable
         feed("adsb.lol", false);
@@ -1432,10 +1499,29 @@ mod tests {
         assert!(win.get_attribution().contains("Tiles: 127.0.0.1:9"));
         // the watch channel carries the new interval/source to the poller
         let p = with_app(|a| a.params_tx.borrow().clone()).unwrap();
+        assert_eq!(p.source, SourceChoice::AdsbFi);
+        assert_eq!(p.interval, Duration::from_secs(12));
+
+        // preload off + fixed refresh: visible area only, full interval
+        win.invoke_open_settings();
+        assert_eq!(win.get_s_preload(), 250.0);
+        assert!(win.get_s_adaptive());
+        win.set_s_preload(3.0); // snaps to 0 = off
+        win.set_s_adaptive(false);
+        win.invoke_save_settings();
+        let on_disk = Config::load_from(&config_path);
         assert_eq!(
-            (p.interval, p.source),
-            (Duration::from_secs(12), SourceChoice::AdsbFi)
+            (on_disk.preload_radius_nm, on_disk.adaptive_refresh),
+            (0, false)
         );
+        let p = with_app(|a| a.params_tx.borrow().clone()).unwrap();
+        assert!(p.wide.is_none());
+        assert_eq!(p.interval, Duration::from_secs(12));
+        win.invoke_open_settings();
+        win.set_s_preload(204.0); // snaps to 200
+        win.set_s_adaptive(true);
+        win.invoke_save_settings();
+        assert_eq!(Config::load_from(&config_path).preload_radius_nm, 200);
 
         // metric filter input is interpreted in metres after the units change
         win.set_f_min_alt("3000".into()); // ≈ 9,843 ft
